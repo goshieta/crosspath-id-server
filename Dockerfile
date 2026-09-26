@@ -10,7 +10,7 @@ RUN mvn -B dependency:go-offline -DskipTests
 
 # ソースコードをコピーしてビルド
 COPY src src
-RUN mvn -B -DskipTests package -Dspring.boot.maven-plugin.skip=true
+RUN mvn -B -DskipTests package
 
 # Stage 2: Runtime with minimal JRE
 FROM eclipse-temurin:21-jre-alpine

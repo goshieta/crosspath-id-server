@@ -9,7 +9,8 @@ AR_REPO="${AR_REPO:-crosspath}"
 SERVICE="${SERVICE:-id-server}"
 
 IMAGE="${REGION}-docker.pkg.dev/${PROJECT_ID}/${AR_REPO}/id-server:latest"
-DB_URL="jdbc:postgresql:///${DB_NAME}?host=/cloudsql/${PROJECT_ID}:${REGION}:${SQL_INSTANCE}&socketTimeout=15&connectTimeout=10"
+# Cloud SQL Java Connector 経由で接続（/cloudsql ソケットに依存しない）
+DB_URL="jdbc:postgresql:///${DB_NAME}?cloudSqlInstance=${PROJECT_ID}:${REGION}:${SQL_INSTANCE}&socketFactory=com.google.cloud.sql.postgres.SocketFactory&ipType=PUBLIC&socketTimeout=15&connectTimeout=10"
 
 echo "Deploying to Cloud Run..."
 gcloud run deploy "${SERVICE}" \
@@ -27,7 +28,7 @@ gcloud run deploy "${SERVICE}" \
     --no-cpu-boost \
     --cpu-throttling \
     --add-cloudsql-instances="${PROJECT_ID}:${REGION}:${SQL_INSTANCE}" \
-    --set-env-vars="DB_URL=${DB_URL},DB_USER=${APP_USER:-crosspath_app},DB_MIGRATION_USER=${OWNER_USER:-postgres}" \
+    --set-env-vars="DB_URL=${DB_URL},DB_USER=${APP_USER:-crosspath_app},DB_MIGRATION_USER=${OWNER_USER:-postgres},SERVER_PORT=8080" \
     --set-secrets="DB_PASSWORD=db-app-password:latest,DB_MIGRATION_PASSWORD=db-owner-password:latest"
 
 echo "Deployment complete."

@@ -51,6 +51,14 @@
             <artifactId>flyway-database-postgresql</artifactId>
         </dependency>
 
+        <!-- Cloud SQL Java Connector: Cloud Run から Cloud SQL へ接続する -->
+        <dependency>
+            <groupId>com.google.cloud.sql</groupId>
+            <artifactId>postgres-socket-factory</artifactId>
+            <version>1.30.0</version>
+            <scope>runtime</scope>
+        </dependency>
+
         <!-- HikariCP (included via spring-boot-starter-jdbc) -->
 
         <!-- Test -->

@@ -31,6 +31,14 @@ spring:
     schemas: public
     baseline-on-migrate: false
 
+app:
+  rate-limit:
+    # SPEC §4 の環境変数名で上書き可能にする
+    enabled: ${RATE_LIMIT_ENABLED:true}
+    per-ip-per-minute: ${RATE_LIMIT_PER_IP_PER_MINUTE:10}
+    per-ip-burst: ${RATE_LIMIT_PER_IP_BURST:20}
+    new-registrations-per-second: ${RATE_LIMIT_NEW_REGISTRATIONS_PER_SECOND:10}
+
 management:
   endpoints:
     web:

@@ -99,35 +99,96 @@ docker run --rm -v "$PWD":/app -w /app -v /var/run/docker.sock:/var/run/docker.s
   maven:3.9-eclipse-temurin-21 mvn -B verify
 ```
 
+## デプロイ済み環境
+
+| 項目 | 値 |
+|---|---|
+| Cloud Run URL | https://id-server-1084526017972.asia-northeast1.run.app |
+| Cloud Run サービス | `id-server`（asia-northeast1, revision `id-server-00004-ddk`） |
+| Cloud SQL | `crosspath-pg`（POSTGRES_16, db-f1-micro, asia-northeast1-a） |
+| 稼働確認 | `/actuator/health` = 200 UP、登録 201 → 再送 200（同一 user_id） |
+
 ## GCP デプロイ手順
 
-`deploy/` ディレクトリのスクリプトを番号順に実行する。詳細は `deploy/README.md` 参照。
+`deploy/` ディレクトリのスクリプトを番号順に実行する（ただし `20-create-sql.sh` / `30-secret.sh` は冪等。
+既存リソースを検出して安全にスキップする）。詳細は `deploy/README.md` 参照。
 
-1. `10-enable-apis.sh` - API 有効化
-2. `20-create-sql.sh` - Cloud SQL 作成
-3. `30-secret.sh` - Secret Manager 設定
-4. `40-build-push.sh` - イメージビルド & push
-5. `50-deploy-cloudrun.sh` - Cloud Run デプロイ
-6. `99-smoke-test.sh` - 動作確認
+1. `10-enable-apis.sh` - GCP API 有効化
+2. `20-create-sql.sh` - Cloud SQL インスタンス・DB・ユーザ作成（冪等）
+3. `30-secret.sh` - Secret Manager にパスワードを保存（冪等）
+4. `40-build-push.sh` - Artifact Registry にイメージを build & push
+5. `50-deploy-cloudrun.sh` - Cloud Run にデプロイ
+6. `99-smoke-test.sh` - デプロイ後の動作確認
+
+コスト削減のため、使用しない期間は `61-sql-stop.sh` で SQL を停止、
+再開時は `60-sql-start.sh` で起動する。
+
+### Cloud SQL 接続方式（実装上の決定）
+
+Cloud Run から Cloud SQL へは **Cloud SQL Java Connector**
+(`com.google.cloud.sql:postgres-socket-factory`, `pom.xml` の runtime 依存) で接続する。
+
+```
+jdbc:postgresql:///<DB>?cloudSqlInstance=<PROJECT>:<REGION>:<INSTANCE>
+  &socketFactory=com.google.cloud.sql.postgres.SocketFactory&ipType=PUBLIC&socketTimeout=15&connectTimeout=10
+```
+
+理由: pgjdbc は `/cloudsql/<INSTANCE>` の Unix ドメインソケットを解釈せず TCP（host=null）に
+フォールバックして起動に失敗するため（2026-09-26 に検証済み）。Connector は Cloud SQL Admin API 経由で
+TLS 接続を確立するので `/cloudsql` のマウントに依存しない。
+
+`--add-cloudsql-instances` は互換のため付与しているが、接続には必須ではない。
+
+### 必要な IAM 権限（Cloud Run 実行サービスアカウント）
+
+既定の Compute Engine SA（`<PROJECT_NUMBER>-compute@developer.gserviceaccount.com`）に以下を付与する
+（未付与だと revision 作成が `Permission denied on secret` や接続失敗で落ちる）:
+
+- `roles/secretmanager.secretAccessor`（秘密 `db-app-password`, `db-owner-password` に対して）
+- `roles/cloudsql.client`（プロジェクトに対して）
+
+```bash
+SA="$(gcloud projects describe ${PROJECT_ID} --format='value(projectNumber)')-compute@developer.gserviceaccount.com"
+for s in db-app-password db-owner-password; do
+  gcloud secrets add-iam-policy-binding $s --member="serviceAccount:$SA" \
+    --role=roles/secretmanager.secretAccessor
+ done
+gcloud projects add-iam-policy-binding ${PROJECT_ID} \
+  --member="serviceAccount:$SA" --role=roles/cloudsql.client
+```
+
+### レート制限の上書き
+
+`RATE_LIMIT_ENABLED` / `RATE_LIMIT_PER_IP_PER_MINUTE` / `RATE_LIMIT_PER_IP_BURST` /
+`RATE_LIMIT_NEW_REGISTRATIONS_PER_SECOND` で上書きできる（既定: true, 10, 20, 10）。
+大量の並行リクエストを検証する場合は一時的に `RATE_LIMIT_ENABLED=false` の revision を
+別サービスとして立てると、機能検証をレート制限にマスクされずに実施できる。
 
 ### DB 権限付与
 
 アプリロール `crosspath_app` への DB 権限付与は Flyway V2 マイグレーション
 (`src/main/resources/db/migration/V2__grants.sql`) で行う。
-マイグレーションユーザー（`DB_MIGRATION_USER`）には所有者ロールを設定し、
-アプリ実行ユーザー（`DB_USER`）には権限を絞った `crosspath_app` を設定する。
+マイグレーションユーザー（`DB_MIGRATION_USER`）には Cloud SQL 組み込みの所有者ロール
+`postgres` を設定し、アプリ実行ユーザー（`DB_USER`）には権限を絞った `crosspath_app` を設定する。
 
 ### 必要な環境変数
 
-各スクリプトは以下の環境変数で上書き可能（既定値あり）:
-- `PROJECT_ID=crosspath-id-server`
-- `REGION=asia-northeast1`
-- `SQL_INSTANCE=crosspath-pg`
-- `DB_NAME=crosspath`
-- `APP_USER=crosspath_app`
-- `OWNER_USER=crosspath`
-- `AR_REPO=crosspath`
-- `SERVICE=id-server`
+各スクリプトは以下の環境変数で上書き可能（既定値あり）。スクリプト `20-create-sql.sh` と
+`30-secret.sh` は `/tmp/` 経由でパスワードを受け渡す。シークレット名は
+`db-owner-password`（postgres 用）と `db-app-password`（crosspath_app 用）。
+
+| 変数名 | 既定値 | 説明 |
+|---|---|---|
+| `PROJECT_ID` | `crosspath-id-server` | GCP プロジェクト ID |
+| `REGION` | `asia-northeast1` | GCP リージョン |
+| `SQL_INSTANCE` | `crosspath-pg` | Cloud SQL インスタンス名 |
+| `DB_NAME` | `crosspath` | データベース名 |
+| `APP_USER` | `crosspath_app` | アプリ実行 DB ユーザ |
+| `OWNER_USER` | `postgres` | マイグレーション実行ユーザ（Cloud SQL 組み込み） |
+| `DB_MIGRATION_USER` | `postgres` | Flyway マイグレーションユーザ（`50-deploy-cloudrun.sh` で使用） |
+| `DB_USER` | `crosspath_app` | アプリ DB ユーザ（`50-deploy-cloudrun.sh` で使用） |
+| `AR_REPO` | `crosspath` | Artifact Registry リポジトリ名 |
+| `SERVICE` | `id-server` | Cloud Run サービス名 |
 
 ## コスト
 

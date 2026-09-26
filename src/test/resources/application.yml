@@ -1,0 +1,34 @@
+spring:
+  lifecycle:
+    timeout-per-shutdown-phase: 20s
+  jackson:
+    deserialization:
+      fail-on-unknown-properties: true
+  datasource:
+    hikari:
+      connection-timeout: 5000
+
+server:
+  error:
+    whitelabel:
+      enabled: false
+  shutdown: graceful
+
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health
+  endpoint:
+    health:
+      probes:
+        enabled: true
+
+logging:
+  level:
+    root: INFO
+
+# Disable rate limiting in tests
+app:
+  rate-limit:
+    enabled: false
